@@ -1,5 +1,31 @@
 #Import Necessary Libraries 
 import numpy as np
+from scipy.stats import norm
+
+def black_scholes_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma):
+    """
+    Parameters:
+        option_type (str): 'call' or 'put'
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to maturity (in years)
+        r (float): Risk-free rate (annualized)
+        sigma (float): Volatility of underlying (annualized)
+    Returns:
+        float: Option price
+    """
+    d1 = (np.log(current_price / strike_price) + (interest_rate + 0.5 * sigma ** 2) * time_to_maturity) / (sigma * np.sqrt(time_to_maturity))
+    d2 = d1 - sigma * np.sqrt(time_to_maturity)
+
+    if option_type == 'call':
+        price = current_price * norm.cdf(d1) - strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(d2)
+    elif option_type == 'put':
+        price = strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(-d2) - current_price * norm.cdf(-d1)
+    else:
+        raise ValueError("Invalid option type. Use 'call' or 'put'.")
+    
+    return price
+
 
 def binomial_tree_price(current_price, strike_price, time_to_maturity, interest_rate, sigma, option_type, n_steps):
     """
