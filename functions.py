@@ -149,6 +149,8 @@ def binomial_tree_price(
     # At the end of backward induction, option_values has length 1: it's the value at time 0.
     return float(option_values[0])
 
+import numpy as np
+
 def binomial_barrier_price_up_and_in(
     option_type,
     current_price,
@@ -159,68 +161,67 @@ def binomial_barrier_price_up_and_in(
     barrier_price,
     n_steps=100
 ):
-    """
-    Binomial tree pricer for European up-and-in barrier options.
-    
-    Parameters:
-        option_type (str): 'call' or 'put'
-        current_price (float): initial stock price
-        strike_price (float): strike price of the option
-        time_to_maturity (float): time to maturity in years
-        interest_rate (float): annual risk-free rate
-        sigma (float): annual volatility
-        barrier_price (float): barrier level (must be breached during option life)
-        n_steps (int): number of time steps in the tree
-
-    Returns:
-        float: Option price
-    """
-
     dt = time_to_maturity / n_steps
-    up = np.exp(sigma * np.sqrt(dt))
-    down = 1 / up
+    u = np.exp(sigma * np.sqrt(dt))
+    d = 1 / u
     discount = np.exp(-interest_rate * dt)
-    p = (np.exp(interest_rate * dt) - down) / (up - down)
+    p = (np.exp(interest_rate * dt) - d) / (u - d)
 
-    # Stock tree: store max price seen along each path
-    stock_tree = [[0.0] * (i + 1) for i in range(n_steps + 1)]
-    max_tree = [[0.0] * (i + 1) for i in range(n_steps + 1)]
+    # Stock tree (S) and barrier breach tracker (True/False)
+    S = [[0.0 for _ in range(i + 1)] for i in range(n_steps + 1)]
+    barrier_breached = [[False for _ in range(i + 1)] for i in range(n_steps + 1)]
 
+    # Initialize stock prices and barrier breach flags
     for i in range(n_steps + 1):
         for j in range(i + 1):
-            price = current_price * (up ** j) * (down ** (i - j))
-            stock_tree[i][j] = price
-            max_price = max(price, barrier_price) if i == 0 else max(price, max_tree[i - 1][j if j == i else j])
-            max_tree[i][j] = max_price
+            S_ij = current_price * (u ** j) * (d ** (i - j))
+            S[i][j] = S_ij
 
-    # Terminal payoff (only if barrier was breached)
-    option_tree = [[0.0] * (i + 1) for i in range(n_steps + 1)]
+            # For i == 0, we're at the root node
+            if i == 0:
+                barrier_breached[i][j] = S_ij >= barrier_price
+            else:
+                from_left = False
+                from_right = False
+
+                if j < i:
+                    from_left = barrier_breached[i - 1][j]
+                if j > 0:
+                    from_right = barrier_breached[i - 1][j - 1]
+
+                # Breach occurs if this node hits the barrier or any ancestor did
+                barrier_breached[i][j] = (S_ij >= barrier_price) or from_left or from_right
+
+    # Terminal payoff - only if barrier was breached
+    V = [[0.0 for _ in range(i + 1)] for i in range(n_steps + 1)]
     for j in range(n_steps + 1):
-        final_price = stock_tree[n_steps][j]
-        max_price = max_tree[n_steps][j]
-
-        if max_price >= barrier_price:
+        if barrier_breached[n_steps][j]:
+            ST = S[n_steps][j]
             if option_type == 'call':
-                option_tree[n_steps][j] = max(final_price - strike_price, 0)
+                V[n_steps][j] = max(ST - strike_price, 0)
             elif option_type == 'put':
-                option_tree[n_steps][j] = max(strike_price - final_price, 0)
-        else:
-            option_tree[n_steps][j] = 0.0
+                V[n_steps][j] = max(strike_price - ST, 0)
 
     # Backward induction
     for i in range(n_steps - 1, -1, -1):
         for j in range(i + 1):
-            max_price = max_tree[i][j]
-            if max_price >= barrier_price:
-                continuation = discount * (
-                    p * option_tree[i + 1][j + 1] +
-                    (1 - p) * option_tree[i + 1][j]
-                )
-                option_tree[i][j] = continuation
+            # Calculate continuation value regardless of current breach status
+            continuation_value = discount * (
+                p * V[i + 1][j + 1] +
+                (1 - p) * V[i + 1][j]
+            )
+            
+            # For up-and-in barrier: option has value if barrier was breached
+            # OR if there's potential value from paths that breach the barrier later
+            if barrier_breached[i][j]:
+                # Barrier already breached - option is active
+                V[i][j] = continuation_value
             else:
-                option_tree[i][j] = 0.0
+                # Barrier not yet breached - only has value from future breach paths
+                V[i][j] = continuation_value
 
-    return option_tree[0][0]
+    return V[0][0]
+
 
 def monte_carlo_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma, n_paths=10000):
     Z = np.random.standard_normal(n_paths)
