@@ -90,3 +90,115 @@ class BarrierOption(Option):
             )
         else:
             raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")
+
+# ZeroCurve will storre the zero rates and discount factors for given maturities and zero rates 
+# the class will have the following methods:
+# - add_zero_rate(maturity, zero_rate): add a zero rate to the curve
+# - get_zero_rate(maturity): get the zero rate for a given maturity
+
+# import necessary libraries
+import numpy as np
+import math
+
+import math
+
+class ZeroCurve:
+    def __init__(self):
+        self.maturities = []
+        self.zero_rates = []
+        self.AtMats = []
+        self.discount_factors = []
+
+    def add_zero_rate(self, maturity, zero_rate):
+        self.maturities.append(maturity)
+        self.zero_rates.append(zero_rate)
+        self.AtMats.append(math.exp(zero_rate * maturity))
+        self.discount_factors.append(1 / self.AtMats[-1])
+
+    def add_discount_factor(self, maturity, discount_factor):
+        self.maturities.append(maturity)
+        self.discount_factors.append(discount_factor)
+        self.AtMats.append(1 / discount_factor)
+        self.zero_rates.append(math.log(1 / discount_factor) / maturity)
+
+    def get_AtMat(self, maturity):
+        if maturity in self.maturities:
+            return self.AtMats[self.maturities.index(maturity)]
+        else:
+            return exp_interp(self.maturities, self.AtMats, maturity)
+
+    def get_discount_factor(self, maturity):
+        if maturity in self.maturities:
+            return self.discount_factors[self.maturities.index(maturity)]
+        else:
+            return exp_interp(self.maturities, self.discount_factors, maturity)
+
+    def get_zero_rate(self, maturity):
+        if maturity in self.maturities:
+            return self.zero_rates[self.maturities.index(maturity)]
+        else:
+            return math.log(self.get_AtMat(maturity)) / maturity
+
+    def get_zero_curve(self):
+        return self.maturities, self.discount_factors
+
+    def npv(self, cash_flows):
+        npv = 0
+        for maturity in cash_flows.get_maturities():
+            npv += cash_flows.get_cash_flow(maturity) * self.get_discount_factor(maturity)
+        return npv
+
+
+def exp_interp(xs, ys, x):
+    xs = list(xs)
+    ys = list(ys)
+
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1] 
+
+    idx = max(i for i in range(len(xs)) if xs[i] <= x)
+    x0, x1 = xs[idx], xs[idx + 1]
+    y0, y1 = ys[idx], ys[idx + 1]
+
+    rate = (math.log(y1) - math.log(y0)) / (x1 - x0)
+    y = y0 * math.exp(rate * (x - x0))
+    return y
+
+
+class YieldCurve(ZeroCurve):
+    def __init__(self):
+        super().__init__()
+        self.portfolio = []
+
+    def set_constituent_portfolio(self, portfolio):
+        self.portfolio = portfolio
+        self.portfolio.set_cash_flows()
+
+    def bootstrap(self):
+        bank_bills = self.portfolio.get_bank_bills()
+        bonds = self.portfolio.get_bonds()
+
+        self.add_zero_rate(0, 0)
+
+        for bank_bill in bank_bills:
+            self.add_discount_factor(
+                bank_bill.get_maturity(),
+                bank_bill.get_price() / bank_bill.get_face_value()
+            )
+
+        for bond in bonds:
+            pv = 0
+            bond_dates = [cf[0] for cf in bond.get_cash_flows()]
+            bond_amounts = [cf[1] for cf in bond.get_cash_flows()]
+
+            for i in range(1, len(bond_amounts) - 1):
+                pv += bond_amounts[i] * self.get_discount_factor(bond_dates[i])
+
+            print("PV of all the cashflows except maturity is:", pv)
+            print("The bond price is:", bond.get_price())
+            print("The last cashflow is:", bond_amounts[-1])
+
+            df = (bond.get_price() - pv) / bond_amounts[-1]
+            self.add_discount_factor(bond.get_maturity(), df)
