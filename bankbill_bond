@@ -1,0 +1,123 @@
+import importlib
+import Option_Classes as opt
+importlib.reload(opt)
+import pandas as pd
+import tabulate as tb
+
+# create an instance of the ZeroCurve class
+zc = opt.ZeroCurve()
+
+# add some zero rates to the curve
+zc.add_zero_rate(1, 0.05)
+zc.add_zero_rate(2, 0.06)
+zc.add_zero_rate(3, 0.07)
+
+# create an instance of the CashFlows class called my_cash_flows
+my_cash_flows = opt.CashFlows()
+
+# add a cash flow of 1000 at time 1
+my_cash_flows.add_cash_flow(1, 1000)
+
+# add a cash flow of 1500 at time 2.5
+my_cash_flows.add_cash_flow(2.5, 1500)
+
+print(my_cash_flows.get_cash_flows())
+print(my_cash_flows.get_maturities())
+print(my_cash_flows.get_amounts())
+print(zc.npv(my_cash_flows))
+
+# create a new dataframe called cash_flows_df to store the cash flows
+cash_flows_df = pd.DataFrame(data={'maturity': my_cash_flows.get_maturities(), 'amount': my_cash_flows.get_amounts()})
+# set the index of the dataframe to be the maturity
+cash_flows_df.set_index('maturity', inplace=True)
+cash_flows_df
+
+# create an instance of the bank_bill class called my_bank_bill
+my_bank_bill = opt.Bank_bill()
+my_bank_bill.set_ytm(0.06)
+my_bank_bill.set_cash_flows()
+
+bank_bill_cashflows = my_bank_bill.get_cash_flows()
+print(bank_bill_cashflows)
+print(zc.npv(my_bank_bill))
+
+# create a new dataframe called cash_flows_df to store the cash flows
+bill_cash_flows_df = pd.DataFrame(data={'Maturity': my_bank_bill.get_maturities(), 'Amount': my_bank_bill.get_amounts()})
+# set the index of the dataframe to be the maturity
+bill_cash_flows_df.set_index('Maturity', inplace=True)
+bill_cash_flows_df
+
+# create an instance of the bond class called my_bond
+my_bond = opt.Bond()
+my_bond.set_maturity(1)
+my_bond.set_coupon(0.05)
+my_bond.set_frequency(2)
+my_bond.set_face_value(100)
+my_bond.set_ytm(0.05)
+
+my_bond.set_cash_flows()
+bond_cashflows = my_bond.get_cash_flows()
+print("The cashflows of the bond are : " + str(bond_cashflows))
+print("The PV of the bond is : " + str(zc.npv(my_bond)))
+print("")
+
+# create a new dataframe called cash_flows_df to store the cash flows
+bond_cash_flows_df = pd.DataFrame(data={'Maturity': my_bond.get_maturities(), 'Amount': my_bond.get_amounts()})
+# set the index of the dataframe to be the maturity
+bond_cash_flows_df.set_index('Maturity', inplace=True)
+
+print("Here are the cashflows of the bond in a dataframe : ")
+print(bond_cash_flows_df.to_string())
+print("")
+print("Here are the cashflows of the bond in a table using the tabulate library: ")
+print(tb.tabulate(bond_cash_flows_df, headers='keys', tablefmt='psql'))
+
+test_price = (my_bond.coupon/my_bond.frequency*my_bond.face_value)*(1-(1+my_bond.ytm/my_bond.frequency)**(-my_bond.maturity*my_bond.frequency))/(my_bond.ytm/my_bond.frequency) \
+          + my_bond.face_value/((1 + my_bond.ytm/my_bond.frequency)**(my_bond.maturity*my_bond.frequency))
+print(test_price)
+
+# create an instance of the portfolio class called my_portfolio
+my_portfolio = opt.Portfolio()
+
+# create another instance of the bond class called my_bond_2
+my_bond_2 = opt.Bond()
+my_bond_2.set_maturity(2)
+my_bond_2.set_coupon(0.08)
+my_bond_2.set_frequency(4)
+my_bond_2.set_face_value(1000)
+my_bond_2.set_ytm(0.04)
+my_bond_2.set_cash_flows()
+
+# add the bonds to the portfolio
+my_portfolio.add_bond(my_bond_2)
+my_portfolio.add_bond(my_bond)
+
+print("The bonds in the portfolio are : " + str(my_portfolio.get_bonds()))
+bond_cashflows = my_bond_2.get_cash_flows()
+print("The cashflows of my_bond_2 are : " + str(bond_cashflows))
+print("The PV of my_bond_2 is : " + str(zc.npv(my_bond)))
+print("")
+
+# create an instance of the bank_bill class called bank_bill_2
+bank_bill_2 = opt.Bank_bill()
+bank_bill_2.set_maturity(.5)
+bank_bill_2.set_ytm(0.07)
+bank_bill_2.set_cash_flows()
+
+my_portfolio.add_bank_bill(bank_bill_2)
+my_portfolio.add_bank_bill(my_bank_bill)
+
+my_portfolio.set_cash_flows()
+portfolio_cashflows = my_portfolio.get_cash_flows()
+print("The cashflows of the portfolio are : ")
+
+portfolio_cashflows_df = pd.DataFrame(data={'Maturity': my_portfolio.get_maturities(), 'Amount': my_portfolio.get_amounts()})
+print(portfolio_cashflows_df.to_string())
+
+print("The PV of the portfolio is : " + str(zc.npv(my_portfolio)))
+print("")
+
+# use pull_request to get zero rate(s) from the zero curve
+print("Zero rate for my_bank_bill:", my_bank_bill.pull_request(zc))  # returns a float
+print("Zero rates for my_bond:", my_bond.pull_request(zc))          # returns a list of floats
+print("Zero rates for my_portfolio:", my_portfolio.pull_request(zc))  # returns a list of floats
