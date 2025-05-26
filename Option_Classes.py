@@ -90,3 +90,37 @@ class BarrierOption(Option):
             )
         else:
             raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")
+
+class Cashflows:
+    def __init__(self):
+        self.cashflow_dict = {}  # {maturity: amount}
+
+    def add_cash_flow(self, maturity, amount):
+        """Add a cash flow at a specific maturity."""
+        if maturity in self.cashflow_dict:
+            self.cashflow_dict[maturity] += amount
+        else:
+            self.cashflow_dict[maturity] = amount
+
+    def get_cash_flow(self, maturity):
+        """Get the cash flow amount at a specific maturity."""
+        return self.cashflow_dict.get(maturity, 0.0)
+
+    def get_maturities(self):
+        """Return a sorted list of all maturities."""
+        return sorted(self.cashflow_dict.keys())
+
+    def get_cash_flows(self):
+        """Return a list of (maturity, amount) tuples sorted by maturity."""
+        return sorted(self.cashflow_dict.items())
+
+    def present_value(self, zero_curve):
+        """Calculate the present value of the cashflows using a ZeroCurve."""
+        pv = 0.0
+        for maturity, amount in self.get_cash_flows():
+            df = zero_curve.get_discount_factor(maturity)
+            pv += amount * df
+        return pv
+
+    def __str__(self):
+        return "\n".join([f"Maturity: {m}, Amount: {a}" for m, a in self.get_cash_flows()])
