@@ -1,3 +1,4 @@
+import numpy as np
 from datetime import date
 from functions import (
     black_scholes_price,
@@ -36,6 +37,52 @@ class EuropeanOption(Option):
             interest_rate=self.interest_rate,
             sigma=self.sigma
         )
+    
+    def greeks(self):
+        """Approximate Greeks using finite differences for American options"""
+        # Use small perturbations to estimate Greeks
+        h = 0.01  # 1% bump
+        base_price = self.option_price()
+        
+        # Delta: sensitivity to underlying price
+        self.current_price += h
+        up_price = self.option_price()
+        self.current_price -= 2 * h
+        down_price = self.option_price()
+        self.current_price += h  # Reset to original
+        delta = (up_price - down_price) / (2 * h)
+        
+        # Gamma: second derivative with respect to underlying price
+        gamma = (up_price - 2 * base_price + down_price) / (h ** 2)
+        
+        # Theta: sensitivity to time (approximate)
+        original_ttm = self.time_to_maturity()
+        time_bump = 1/365  # 1 day
+        self.today_date = date.fromordinal(self.today_date.toordinal() + 1)
+        theta_price = self.option_price()
+        self.today_date = date.fromordinal(self.today_date.toordinal() - 1)  # Reset
+        theta = (theta_price - base_price) / time_bump
+        
+        # Vega: sensitivity to volatility
+        self.sigma += 0.01  # 1% volatility bump
+        vega_price = self.option_price()
+        self.sigma -= 0.01  # Reset
+        vega = (vega_price - base_price) / 0.01
+        
+        # Rho: sensitivity to interest rate
+        self.interest_rate += 0.01  # 1% rate bump
+        rho_price = self.option_price()
+        self.interest_rate -= 0.01  # Reset
+        rho = (rho_price - base_price) / 0.01
+        
+        return {
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'rho': rho
+        }
+
 
 
 class AmericanOption(Option):
@@ -56,6 +103,52 @@ class AmericanOption(Option):
             american=True,
             n_steps=self.n_steps
         )
+    
+    def greeks(self):
+        """Approximate Greeks using finite differences for American options"""
+        # Use small perturbations to estimate Greeks
+        h = 0.01  # 1% bump
+        base_price = self.option_price()
+        
+        # Delta: sensitivity to underlying price
+        self.current_price += h
+        up_price = self.option_price()
+        self.current_price -= 2 * h
+        down_price = self.option_price()
+        self.current_price += h  # Reset to original
+        delta = (up_price - down_price) / (2 * h)
+        
+        # Gamma: second derivative with respect to underlying price
+        gamma = (up_price - 2 * base_price + down_price) / (h ** 2)
+        
+        # Theta: sensitivity to time (approximate)
+        original_ttm = self.time_to_maturity()
+        time_bump = 1/365  # 1 day
+        self.today_date = date.fromordinal(self.today_date.toordinal() + 1)
+        theta_price = self.option_price()
+        self.today_date = date.fromordinal(self.today_date.toordinal() - 1)  # Reset
+        theta = (theta_price - base_price) / time_bump
+        
+        # Vega: sensitivity to volatility
+        self.sigma += 0.01  # 1% volatility bump
+        vega_price = self.option_price()
+        self.sigma -= 0.01  # Reset
+        vega = (vega_price - base_price) / 0.01
+        
+        # Rho: sensitivity to interest rate
+        self.interest_rate += 0.01  # 1% rate bump
+        rho_price = self.option_price()
+        self.interest_rate -= 0.01  # Reset
+        rho = (rho_price - base_price) / 0.01
+        
+        return {
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'rho': rho
+        }
+
 
 
 class BarrierOption(Option):
@@ -91,7 +184,49 @@ class BarrierOption(Option):
                 self.n_steps
             )
         else:
-            raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")  
+            raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")
+
+    def greeks(self):
+        """Calculate Greeks using finite differences for barrier options"""
+        h = 0.01
+        base_price = self.option_price()
+        
+        # Delta
+        self.current_price += h
+        up_price = self.option_price()
+        self.current_price -= 2 * h
+        down_price = self.option_price()
+        self.current_price += h
+        delta = (up_price - down_price) / (2 * h)
+        
+        # Gamma
+        gamma = (up_price - 2 * base_price + down_price) / (h ** 2)
+        
+        # Vega
+        self.sigma += 0.01
+        vega_price = self.option_price()
+        self.sigma -= 0.01
+        vega = (vega_price - base_price) / 0.01
+        
+        # Theta (approximate)
+        self.today_date = date.fromordinal(self.today_date.toordinal() + 1)
+        theta_price = self.option_price()
+        self.today_date = date.fromordinal(self.today_date.toordinal() - 1)
+        theta = (theta_price - base_price) / (1/365)
+        
+        # Rho
+        self.interest_rate += 0.01
+        rho_price = self.option_price()
+        self.interest_rate -= 0.01
+        rho = (rho_price - base_price) / 0.01
+        
+        return {
+            'delta': delta,
+            'gamma': gamma,
+            'theta': theta,
+            'vega': vega,
+            'rho': rho
+        }  
 
 
 class BasketOption(Option):
@@ -115,6 +250,77 @@ class BasketOption(Option):
             sigma=self.sigma,
             correlation_matrix=self.correlation_matrix,
             option_type=self.option_type,
-            n_paths=10000
+            n_paths=100000
         )
-
+    
+    def greeks(self):
+        """Calculate basket option Greeks - returns delta for each underlying"""
+        base_price = self.option_price()
+        deltas = []
+        
+        h = 0.01  # 1% bump for each underlying
+        
+        # Calculate delta for each underlying asset
+        for i in range(len(self.current_prices)):
+            # Bump the i-th asset price
+            self.current_prices[i] += h
+            self.current_price = sum(price * weight for price, weight in zip(self.current_prices, self.weights))
+            up_price = self.option_price()
+            
+            # Bump down
+            self.current_prices[i] -= 2 * h
+            self.current_price = sum(price * weight for price, weight in zip(self.current_prices, self.weights))
+            down_price = self.option_price()
+            
+            # Reset
+            self.current_prices[i] += h
+            self.current_price = sum(price * weight for price, weight in zip(self.current_prices, self.weights))
+            
+            # Delta for i-th asset
+            delta_i = (up_price - down_price) / (2 * h)
+            deltas.append(delta_i)
+        
+        # Overall basket volatility for vega calculation
+        portfolio_vol = self._calculate_portfolio_volatility()
+        
+        # Vega - sensitivity to overall volatility
+        # Bump all volatilities proportionally
+        vol_bump = 0.01
+        original_vols = self.sigma.copy()
+        self.sigma = [vol + vol_bump for vol in self.sigma]
+        vega_price = self.option_price()
+        self.sigma = original_vols
+        vega = (vega_price - base_price) / vol_bump
+        
+        # Theta
+        self.today_date = date.fromordinal(self.today_date.toordinal() + 1)
+        theta_price = self.option_price()
+        self.today_date = date.fromordinal(self.today_date.toordinal() - 1)
+        theta = (theta_price - base_price) / (1/365)
+        
+        # Rho
+        self.interest_rate += 0.01
+        rho_price = self.option_price()
+        self.interest_rate -= 0.01
+        rho = (rho_price - base_price) / 0.01
+        
+        return {
+            'deltas': deltas,  # Individual deltas for each asset
+            'vega': vega,
+            'theta': theta,
+            'rho': rho,
+            'portfolio_volatility': portfolio_vol
+        }
+    
+    def _calculate_portfolio_volatility(self):
+        """Calculate the portfolio volatility given weights, individual volatilities, and correlation matrix"""
+        n = len(self.weights)
+        portfolio_variance = 0
+        
+        for i in range(n):
+            for j in range(n):
+                portfolio_variance += (self.weights[i] * self.weights[j] * 
+                                     self.sigma[i] * self.sigma[j] * 
+                                     self.correlation_matrix[i][j])
+        
+        return np.sqrt(portfolio_variance)
