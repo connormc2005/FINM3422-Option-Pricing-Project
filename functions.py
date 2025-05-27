@@ -376,3 +376,35 @@ def _get_rate(target_time, times, rates):
             return rates[i] + weight * (rates[i + 1] - rates[i])
     
     return rates[-1]  # Fallback
+
+def black_scholes_greeks(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma):
+    """
+    Calculate Black-Scholes Greeks
+    
+    Returns:
+        dict: Dictionary containing delta, gamma, theta, vega, rho
+    """
+    d1 = (np.log(current_price / strike_price) + (interest_rate + 0.5 * sigma ** 2) * time_to_maturity) / (sigma * np.sqrt(time_to_maturity))
+    d2 = d1 - sigma * np.sqrt(time_to_maturity)
+    
+    # Common terms
+    nd1 = norm.cdf(d1)
+    nd2 = norm.cdf(d2)
+    npd1 = norm.pdf(d1)
+    
+    if option_type == 'call':
+        delta = nd1
+        theta = (-(current_price * npd1 * sigma) / (2 * np.sqrt(time_to_maturity)) 
+                - interest_rate * strike_price * np.exp(-interest_rate * time_to_maturity) * nd2)
+        rho = strike_price * time_to_maturity * np.exp(-interest_rate * time_to_maturity) * nd2
+    elif option_type == 'put':
+        delta = nd1 - 1
+        theta = (-(current_price * npd1 * sigma) / (2 * np.sqrt(time_to_maturity)) 
+                + interest_rate * strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(-d2))
+        rho = -strike_price * time_to_maturity * np.exp(-interest_rate * time_to_maturity) * norm.cdf(-d2)
+    else:
+        raise ValueError("Invalid option type. Use 'call' or 'put'.")
+    
+    # Gamma and Vega are the same for calls and puts
+    gamma = npd1 / (current_price * sigma * np.sqrt(time_to_maturity))
+    vega = current_price * npd1 * np.sqrt(time_to_maturity)
