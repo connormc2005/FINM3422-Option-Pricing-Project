@@ -4,6 +4,7 @@ from functions import (
     binomial_tree_price,
     monte_carlo_price,
     monte_carlo_barrier_price,
+    monte_carlo_basket_price,
     binomial_barrier_price_up_and_in,
     get_zero_rate
 )
