@@ -222,19 +222,91 @@ def binomial_barrier_price_up_and_in(
 
     return V[0][0]
 
+def monte_carlo_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma, n_paths=10000):
+    """
+    Monte Carlo pricing for European options using GBM simulation.
+    """
+    # Generate random normal values for all paths at once
+    Z = np.random.normal(0, 1, size=n_paths)
+    
+    # Calculate final stock prices using GBM formula
+    final_stock_prices = current_price * np.exp(
+        (interest_rate - 0.5 * sigma ** 2) * time_to_maturity + sigma * np.sqrt(time_to_maturity) * Z
+    )
 
+    # Calculate payoffs
+    if option_type == 'call':
+        payoffs = np.maximum(final_stock_prices - strike_price, 0)
+    elif option_type == 'put':
+        payoffs = np.maximum(strike_price - final_stock_prices, 0)
+    else:
+        raise ValueError("Invalid option type. Use 'call' or 'put'.")
 
+    # Discount back to present value
+    return np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
 
+def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, interest_rate, sigma, barrier_price, n_paths=10000, n_steps=100):
+    """
+    Monte Carlo pricing for up-and-in barrier options using GBM path simulation.
+    """
+    dt = time_to_maturity / n_steps
+    discount_factor = np.exp(-interest_rate * time_to_maturity)
+    
+    # Initialize price matrix (rows=time steps, columns=paths)
+    S = np.zeros((n_steps + 1, n_paths))
+    S[0] = current_price
+    
+    # Generate random normal values for all paths and time steps at once
+    Z = np.random.normal(0, 1, size=(n_steps, n_paths))
+    
+    # Simulate all paths using GBM
+    for i in range(1, n_steps + 1):
+        S[i] = S[i-1] * np.exp((interest_rate - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z[i-1])
+    
+    # Check barrier breach for each path
+    barrier_breached = np.max(S, axis=0) >= barrier_price
+    
+    # Calculate payoffs only for paths that breached the barrier
+    final_prices = S[-1]  # Final prices for all paths
+    payoffs = np.where(barrier_breached, np.maximum(final_prices - strike_price, 0), 0)
+    
+    return discount_factor * np.mean(payoffs)
 
-
-
-
-
-
-
-
-
-
+def monte_carlo_basket_price(current_prices, weights, strike_price, time_to_maturity, interest_rate, sigma, correlation_matrix, option_type='call', n_paths=10000):
+    """
+    Monte Carlo pricing for European basket options using correlated GBM simulation.
+    """
+    n_assets = len(current_prices)
+    
+    # Generate correlated random numbers using Cholesky decomposition
+    L = np.linalg.cholesky(correlation_matrix)
+    
+    # Generate independent random numbers for all paths at once
+    Z = np.random.normal(0, 1, size=(n_assets, n_paths))
+    
+    # Create correlated random numbers for all paths
+    corr_Z = L @ Z
+    
+    # Calculate final asset prices using vectorized GBM
+    final_prices = np.zeros((n_assets, n_paths))
+    for i in range(n_assets):
+        drift = (interest_rate - 0.5 * sigma[i]**2) * time_to_maturity
+        diffusion = sigma[i] * np.sqrt(time_to_maturity) * corr_Z[i]
+        final_prices[i] = current_prices[i] * np.exp(drift + diffusion)
+    
+    # Calculate basket values for all paths
+    basket_values = np.sum(weights * final_prices.T, axis=1)
+    
+    # Calculate payoffs for all paths
+    if option_type.lower() == 'call':
+        payoffs = np.maximum(basket_values - strike_price, 0)
+    elif option_type.lower() == 'put':
+        payoffs = np.maximum(strike_price - basket_values, 0)
+    else:
+        raise ValueError("Invalid option type. Use 'call' or 'put'.")
+    
+    # Discount back to present value
+    return np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
 
 def get_zero_rate(time_to_maturity):
     """

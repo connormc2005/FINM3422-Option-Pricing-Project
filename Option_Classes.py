@@ -91,3 +91,29 @@ class BarrierOption(Option):
             )
         else:
             raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")  
+
+
+class BasketOption(Option):
+    def __init__(self, current_prices, weights, strike_price, expiry, option_type, today_date, sigma, correlation_matrix, interest_rate=None):
+        # Calculate basket value for the base Option class
+        basket_value = sum(w * p for w, p in zip(weights, current_prices))
+        super().__init__(basket_value, strike_price, expiry, option_type, today_date)
+        self.current_prices = current_prices
+        self.weights = weights
+        self.sigma = sigma
+        self.correlation_matrix = correlation_matrix
+        self.interest_rate = interest_rate if interest_rate is not None else get_zero_rate(self.time_to_maturity())
+
+    def option_price(self):
+        return monte_carlo_basket_price(
+            current_prices=self.current_prices,
+            weights=self.weights,
+            strike_price=self.strike_price,
+            time_to_maturity=self.time_to_maturity(),
+            interest_rate=self.interest_rate,
+            sigma=self.sigma,
+            correlation_matrix=self.correlation_matrix,
+            option_type=self.option_type,
+            n_paths=10000
+        )
+
