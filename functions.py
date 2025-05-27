@@ -258,3 +258,72 @@ def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, int
         payoffs.append(payoff)
 
     return discount_factor * np.mean(payoffs)
+
+def get_zero_rate(time_to_maturity):
+    """
+    Bootstrap yield curve to get zero rate for any maturity
+    Converts bank bill discount yields and par yields to zero rates
+    """
+    maturities = [1/12, 3/12, 6/12, 1, 2, 3, 5]  # Time periods we have data for
+    bb_yields = [0.037925, 0.03797, 0.03855]  # Bank bill discount yields (short term)
+    gov_yields = [0.0348, 0.03374, 0.03431, 0.03659]  # Government par yields (long term)
+    zero_rates = []  # Will store our calculated zero rates
+    
+    # Convert bank bills to zero rates using formula: r = (F/P)^(1/T) - 1
+    for i in range(3):  # Process 1M, 3M, 6M bank bills
+        T = maturities[i]
+        price = 1 - bb_yields[i] * T  # Bank bills sold at discount to face value
+        zero_rate = (1/price)**(1/T) - 1  # Extract pure zero rate
+        zero_rates.append(zero_rate)
+    
+    # Bootstrap government bonds (they pay semi-annual coupons)
+    for i in range(4):  # Process 1Y, 2Y, 3Y, 5Y bonds
+        maturity = maturities[i + 3]
+        par_yield = gov_yields[i]
+        
+        if maturity == 1:  # Special case for 1-year bond
+            coupon = par_yield * 100 / 2  # Coupon paid every 6 months
+            from scipy.optimize import fsolve
+            
+            def bond_price_error(z):  # Function to solve bond pricing equation
+                discount_factor = 1 + z/2  # Semi-annual compounding
+                pv = coupon / discount_factor + (coupon + 100) / (discount_factor**2)
+                return pv - 100  # Bond trades at par (price = 100)
+            
+            z_1y = fsolve(bond_price_error, par_yield)[0]  # Solve for zero rate
+            zero_rates.append(z_1y)
+        else:  # Multi-year bonds need bootstrapping
+            coupon = par_yield * 100 / 2  # Semi-annual coupon payment
+            periods = int(maturity * 2)  # Number of coupon payments
+            
+            pv_coupons = 0  # Present value of all intermediate coupons
+            for p in range(1, periods):  # Discount each coupon except the last
+                t = p / 2  # Time when this coupon is paid
+                z = _get_rate(t, maturities[:len(zero_rates)], zero_rates)  # Get zero rate for this time
+                pv_coupons += coupon / (1 + z/2)**p  # Discount this coupon
+            
+            # Solve for the final zero rate that makes bond price = 100
+            final_payment = coupon + 100  # Last coupon plus principal repayment
+            remaining_pv = 100 - pv_coupons  # What the final payment must be worth today
+            discount_factor = final_payment / remaining_pv
+            z = 2 * (discount_factor**(1/periods) - 1)  # Convert to annual rate
+            zero_rates.append(z)
+    
+    return _get_rate(time_to_maturity, maturities, zero_rates)  # Find rate for requested maturity
+
+def _get_rate(target_time, times, rates):
+    """Helper function: uses linear interpolation to find rate for any time period"""
+    if target_time <= times[0]:
+        return rates[0]  # If before our data, use first rate
+    if target_time >= times[-1]:
+        return rates[-1]  # If after our data, use last rate
+    
+    # Find which two data points our target falls between
+    for i in range(len(times) - 1):
+        if times[i] <= target_time <= times[i + 1]:
+            # Calculate how far between the two points we are (0 to 1)
+            weight = (target_time - times[i]) / (times[i + 1] - times[i])
+            # Blend the two rates based on the weight
+            return rates[i] + weight * (rates[i + 1] - rates[i])
+    
+    return rates[-1]  # Fallback
