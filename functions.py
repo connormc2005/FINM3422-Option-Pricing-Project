@@ -223,41 +223,18 @@ def binomial_barrier_price_up_and_in(
     return V[0][0]
 
 
-def monte_carlo_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma, n_paths=10000):
-    Z = np.random.standard_normal(n_paths)
-    final_stock_prices = current_price * np.exp(
-        (interest_rate - 0.5 * sigma ** 2) * time_to_maturity + sigma * np.sqrt(time_to_maturity) * Z
-    )
 
-    if option_type == 'call':
-        payoffs = np.maximum(final_stock_prices - strike_price, 0)
-    elif option_type == 'put':
-        payoffs = np.maximum(strike_price - final_stock_prices, 0)
-    else:
-        raise ValueError("Invalid option type. Use 'call' or 'put'.")
 
-    return np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
 
-def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, interest_rate, sigma, barrier_price, n_paths=10000, n_steps=100):
-    dt = time_to_maturity / n_steps
-    discount_factor = np.exp(-interest_rate * time_to_maturity)
-    payoffs = []
 
-    for _ in range(n_paths):
-        prices = [current_price]
-        for _ in range(n_steps):
-            Z = np.random.normal()
-            next_price = prices[-1] * np.exp(
-                (interest_rate - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * Z
-            )
-            prices.append(next_price)
-        if max(prices) >= barrier_price:
-            payoff = max(prices[-1] - strike_price, 0)
-        else:
-            payoff = 0
-        payoffs.append(payoff)
 
-    return discount_factor * np.mean(payoffs)
+
+
+
+
+
+
+
 
 def get_zero_rate(time_to_maturity):
     """
