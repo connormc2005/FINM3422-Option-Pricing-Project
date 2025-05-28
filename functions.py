@@ -2,7 +2,7 @@ import numpy as np
 import math
 from scipy.stats import norm
 
-def black_scholes_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma):
+def black_scholes_price(option_type, current_price, strike_price, time_to_maturity, interest_rate, sigma, dividend_yield=0.0):
     """
     Calculate Black-Scholes option price
     
@@ -13,17 +13,25 @@ def black_scholes_price(option_type, current_price, strike_price, time_to_maturi
         time_to_maturity (float): Time to maturity (in years)
         interest_rate (float): Risk-free rate (annualized)
         sigma (float): Volatility of underlying (annualized)
+        dividend_yield (float): Continuous annualized dividend yield (e.g., 0.02 for 2%)
     
     Returns:
         float: Option price
     """
-    d1 = (np.log(current_price / strike_price) + (interest_rate + 0.5 * sigma ** 2) * time_to_maturity) / (sigma * np.sqrt(time_to_maturity))
+    # Adjust current_price for continuous dividend yield. S_adj = S * e^(-qT)
+    # This S_adj is the stock price effectively used for a non-dividend paying stock.
+    S_adj = current_price * np.exp(-dividend_yield * time_to_maturity)
+
+    # d1 uses S (original current_price) and (interest_rate - dividend_yield) for the drift
+    d1 = (np.log(current_price / strike_price) + (interest_rate - dividend_yield + 0.5 * sigma ** 2) * time_to_maturity) / (sigma * np.sqrt(time_to_maturity))
     d2 = d1 - sigma * np.sqrt(time_to_maturity)
 
     if option_type == 'call':
-        price = current_price * norm.cdf(d1) - strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(d2)
+
+        price = S_adj * norm.cdf(d1) - strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(d2)
     elif option_type == 'put':
-        price = strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(-d2) - current_price * norm.cdf(-d1)
+        # Put price: K * e^(-rT) * N(-d2) - S * e^(-qT) * N(-d1)
+        price = strike_price * np.exp(-interest_rate * time_to_maturity) * norm.cdf(-d2) - S_adj * norm.cdf(-d1)
     else:
         raise ValueError("Invalid option type. Use 'call' or 'put'.")
     
@@ -38,7 +46,8 @@ def binomial_tree_price(
     sigma,            # σ: Implied volatility of the underlying (in decimal form, e.g., 0.20)
     option_type,      # 'call' or 'put'
     american,         # Boolean: True if American-style, False if European
-    n_steps           # N: Number of time steps in the binomial tree
+    n_steps,          # N: Number of time steps in the binomial tree
+    dividend_yield=0.0  # q: Continuous annualized dividend yield
 ):
     """
     Calculate the price of a European or American option using a Cox-Ross-Rubinstein binomial tree.
@@ -72,11 +81,16 @@ def binomial_tree_price(
     #    - Note that d = 1/u. You can check: d = exp(-σ√Δt) = 1 / exp(σ√Δt) = 1 / u.
 
     # 3) Compute the risk-neutral probability p of an "up" move in each step:
-    #       p = (e^{r Δt} − d) / (u − d)
+    #       p = (e^{(r-q) Δt} − d) / (u − d)
     #    - Under risk-neutral pricing, the expected growth of the stock is risk-free rate.
-    #    - e^{r Δt} is the growth factor on cash over Δt.
-    #    - p must lie between 0 and 1 if u > e^{r Δt} > d, which is usually true in practice.
-    p = (math.exp(interest_rate * dt) - d) / (u - d)
+    #    - e^{(r-q) Δt} is the growth factor on cash over Δt.
+    #    - p must lie between 0 and 1 if u > e^{(r-q) Δt} > d, which is usually true.
+    p = (math.exp((interest_rate - dividend_yield) * dt) - d) / (u - d)
+
+    # Ensure p is within a valid range to prevent issues with u,d,r,q combinations
+    if not (0 < p < 1):
+        # print(f"Warning: Binomial p = {p:.4f} is outside (0,1). Check r, q, sigma, dt.")
+        p = np.clip(p, 0.00001, 0.99999)
 
     # 4) The discount factor per single step is e^{−r Δt}, used to back discount expected payoffs:
     discount = math.exp(-interest_rate * dt)
@@ -159,13 +173,22 @@ def binomial_barrier_price_up_and_in(
     interest_rate,
     sigma,
     barrier_price,
-    n_steps=100
+    n_steps=100,
+    dividend_yield=0.0
 ):
     dt = time_to_maturity / n_steps
     u = np.exp(sigma * np.sqrt(dt))
     d = 1 / u
     discount = np.exp(-interest_rate * dt)
-    p = (np.exp(interest_rate * dt) - d) / (u - d)
+    p = (np.exp((interest_rate - dividend_yield) * dt) - d) / (u - d)
+
+    # Ensure p is within a valid range to prevent issues with u,d,r,q combinations
+    if not (0 < p < 1):
+        # This can happen if (r-q)*dt is too large or too small relative to moves u and d.
+        # For simplicity, clipping or raising an error. Clipping might hide model issues.
+        # A more robust solution might involve adjusting u and d or using a different tree type.
+        # print(f"Warning: Risk-neutral probability p = {p:.4f} is outside (0,1). Check parameters r, q, sigma, dt.")
+        p = np.clip(p, 0.00001, 0.99999) # Clipping p to avoid math errors, though this indicates a parameter issue
 
     # Stock tree (S) and barrier breach tracker (True/False)
     S = [[0.0 for _ in range(i + 1)] for i in range(n_steps + 1)]
@@ -245,7 +268,7 @@ def monte_carlo_price(option_type, current_price, strike_price, time_to_maturity
     # Discount back to present value
     return np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
 
-def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, interest_rate, sigma, barrier_price, n_paths=10000, n_steps=100):
+def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, interest_rate, sigma, barrier_price, n_paths=10000, n_steps=100, dividend_yield=0.0):
     """
     Monte Carlo pricing for up-and-in barrier options using GBM path simulation.
     """
@@ -257,11 +280,20 @@ def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, int
     S[0] = current_price
     
     # Generate random normal values for all paths and time steps at once
+    # Consider antithetic variates for variance reduction if stability is an issue
+    # Z_half = np.random.normal(0, 1, size=(n_steps, n_paths // 2))
+    # Z = np.concatenate((Z_half, -Z_half), axis=1)
+    # if n_paths % 2 != 0: # If odd n_paths, add one more column from new randoms
+    #     Z_extra = np.random.normal(0, 1, size=(n_steps,1))
+    #     Z = np.concatenate((Z, Z_extra), axis=1)
     Z = np.random.normal(0, 1, size=(n_steps, n_paths))
     
-    # Simulate all paths using GBM
+    # Simulate all paths using GBM with dividend yield adjustment
+    drift = (interest_rate - dividend_yield - 0.5 * sigma**2) * dt
+    diffusion_stoch = sigma * np.sqrt(dt) * Z
+
     for i in range(1, n_steps + 1):
-        S[i] = S[i-1] * np.exp((interest_rate - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z[i-1])
+        S[i] = S[i-1] * np.exp(drift + diffusion_stoch[i-1])
     
     # Check barrier breach for each path
     barrier_breached = np.max(S, axis=0) >= barrier_price
@@ -272,41 +304,62 @@ def monte_carlo_barrier_price(current_price, strike_price, time_to_maturity, int
     
     return discount_factor * np.mean(payoffs)
 
-def monte_carlo_basket_price(current_prices, weights, strike_price, time_to_maturity, interest_rate, sigma, correlation_matrix, option_type='call', n_paths=10000):
+def monte_carlo_basket_price(current_prices, weights, strike_price, time_to_maturity, interest_rate, sigma, correlation_matrix, option_type='call', n_paths=10000, dividend_yields=None):
     """
-    Monte Carlo pricing for European basket options using correlated GBM simulation.
+    Monte Carlo pricing for European basket options using GBM simulation.
+    
+    Parameters:
+    ...
+    sigma (list/np.array): List of annualized volatilities for each asset.
+    ...
+    dividend_yields (list/np.array, optional): List of continuous annualized dividend yields for each asset. Defaults to zeros.
     """
     n_assets = len(current_prices)
+    dt = time_to_maturity # For a simple European option, we simulate directly to maturity
     
-    # Generate correlated random numbers using Cholesky decomposition
+    # Ensure current_prices, weights, sigma (volatilities), and dividend_yields are numpy arrays
+    current_prices = np.array(current_prices)
+    weights = np.array(weights)
+    sigmas_arr = np.array(sigma) # Renaming to avoid conflict if 'sigma' is used for single asset elsewhere
+
+    if dividend_yields is None:
+        dividend_yields_arr = np.zeros(n_assets)
+    else:
+        dividend_yields_arr = np.array(dividend_yields)
+        if len(dividend_yields_arr) != n_assets:
+            raise ValueError("Length of dividend_yields must match number of assets.")
+
+    # Cholesky decomposition of the correlation matrix
     L = np.linalg.cholesky(correlation_matrix)
     
-    # Generate independent random numbers for all paths at once
-    Z = np.random.normal(0, 1, size=(n_assets, n_paths))
+    # Generate correlated random normal values for all paths and assets
+    # Z_uncorrelated shape: (n_assets, n_paths)
+    Z_uncorrelated = np.random.normal(0, 1, size=(n_assets, n_paths))
+    Z_correlated = L @ Z_uncorrelated # Correlated random numbers
     
-    # Create correlated random numbers for all paths
-    corr_Z = L @ Z
+    final_asset_prices = np.zeros((n_assets, n_paths))
     
-    # Calculate final asset prices using vectorized GBM
-    final_prices = np.zeros((n_assets, n_paths))
     for i in range(n_assets):
-        drift = (interest_rate - 0.5 * sigma[i]**2) * time_to_maturity
-        diffusion = sigma[i] * np.sqrt(time_to_maturity) * corr_Z[i]
-        final_prices[i] = current_prices[i] * np.exp(drift + diffusion)
+        # Adjusted drift for GBM with dividends: (r - q_i + 0.5 * sigma_i^2)T
+        drift = (interest_rate - dividend_yields_arr[i] + 0.5 * sigmas_arr[i]**2) * time_to_maturity
+        diffusion = sigmas_arr[i] * np.sqrt(time_to_maturity) * Z_correlated[i, :]
+        final_asset_prices[i, :] = current_prices[i] * np.exp(drift + diffusion)
+        
+    # Calculate basket value at maturity for each path
+    basket_values_at_maturity = np.sum(final_asset_prices * weights[:, np.newaxis], axis=0)
     
-    # Calculate basket values for all paths
-    basket_values = np.sum(weights * final_prices.T, axis=1)
-    
-    # Calculate payoffs for all paths
+    # Calculate option payoff for each path
     if option_type.lower() == 'call':
-        payoffs = np.maximum(basket_values - strike_price, 0)
+        payoffs = np.maximum(basket_values_at_maturity - strike_price, 0)
     elif option_type.lower() == 'put':
-        payoffs = np.maximum(strike_price - basket_values, 0)
+        payoffs = np.maximum(strike_price - basket_values_at_maturity, 0)
     else:
         raise ValueError("Invalid option type. Use 'call' or 'put'.")
+        
+    # Discounted average payoff
+    option_price = np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
     
-    # Discount back to present value
-    return np.exp(-interest_rate * time_to_maturity) * np.mean(payoffs)
+    return option_price
 
 def get_zero_rate(time_to_maturity):
     """
