@@ -96,7 +96,7 @@ class EuropeanOption(Option):
         return {
             'delta': delta,
             'gamma': gamma,
-            'theta': theta, # Theta is per year. Divide by 365 for per day.
+            'theta': theta / 365.25, # Theta per day
             'vega': vega,   # Vega is change for 1 vol point (e.g. from 20% to 21%). If h_vol is 0.005 (0.5%), then vega is scaled up.
             'rho': rho     # Rho is change for 1 rate point (e.g. from 2% to 3%).
         }
@@ -185,7 +185,7 @@ class AmericanOption(Option):
         return {
             'delta': delta,
             'gamma': gamma,
-            'theta': theta,
+            'theta': theta / 365.25, # Theta per day
             'vega': vega,
             'rho': rho
             # 'rho_q': rho_q # If you decide to add sensitivity to dividend yield
@@ -286,7 +286,7 @@ class BarrierOption(Option):
         return {
             'delta': delta,
             'gamma': gamma,
-            'theta': theta,
+            'theta': theta / 365.25, # Theta per day
             'vega': vega,
             'rho': rho
         }
@@ -396,7 +396,7 @@ class BasketOption(Option):
         return {
             'deltas': deltas,  # Individual deltas for each asset
             'vega': basket_vega, # Already scaled
-            'theta': basket_theta, # Per year
+            'theta': basket_theta / 365.25, # Theta per day
             'rho': basket_rho # Already scaled
             # 'portfolio_volatility': portfolio_vol # Removed for now
         }
