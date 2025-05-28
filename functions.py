@@ -340,8 +340,8 @@ def monte_carlo_basket_price(current_prices, weights, strike_price, time_to_matu
     final_asset_prices = np.zeros((n_assets, n_paths))
     
     for i in range(n_assets):
-        # Adjusted drift for GBM with dividends: (r - q_i + 0.5 * sigma_i^2)T
-        drift = (interest_rate - dividend_yields_arr[i] + 0.5 * sigmas_arr[i]**2) * time_to_maturity
+        # Adjusted drift for GBM with dividends: (r - q_i - 0.5 * sigma_i^2)T is correct for log S_T/S_0
+        drift = (interest_rate - dividend_yields_arr[i] - 0.5 * sigmas_arr[i]**2) * time_to_maturity
         diffusion = sigmas_arr[i] * np.sqrt(time_to_maturity) * Z_correlated[i, :]
         final_asset_prices[i, :] = current_prices[i] * np.exp(drift + diffusion)
         
