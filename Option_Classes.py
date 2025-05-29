@@ -11,107 +11,159 @@ from functions import (
 )
 
 class Option:
+    """
+    Base option class: foundation for all option types
+    
+    This is the parent class that defines common attributes and methods.
+    All specific option types (European, American, etc.) inherit from this class.
+    """
     def __init__(self, current_price, strike_price, expiry, option_type, today_date):
-        self.current_price = current_price
-        self.strike_price = strike_price
-        self.expiry = expiry
-        self.option_type = option_type
-        self.today_date = today_date
+        # Instance variables: each option object will have its own copy of these values
+        self.current_price = current_price    # Current market price of the underlying asset
+        self.strike_price = strike_price      # Price at which option can be exercised
+        self.expiry = expiry                  # Expiration date (datetime.date object)
+        self.option_type = option_type        # 'call' or 'put'
+        self.today_date = today_date          # Today's date for time calculations
 
     def time_to_maturity(self):
+        """
+        Calculate time remaining until expiration in years
+        
+        Uses .days to get integer days between dates, then converts to years.
+        365.25 accounts for leap years (more accurate than 365).
+        """
         return (self.expiry - self.today_date).days / 365.25
 
 
 class EuropeanOption(Option):
+    """
+    European option: can only be exercised at expiration date
+    
+    Uses Black-Scholes analytical formula for pricing.
+    Inheritance: EuropeanOption inherits all methods from Option class.
+    """
     def __init__(self, current_price, strike_price, expiry, option_type, today_date, sigma, interest_rate=None, dividend_yield=0.0):
+        # Call parent class constructor using super() - this sets up basic option attributes
         super().__init__(current_price, strike_price, expiry, option_type, today_date)
-        self.sigma = sigma
+        
+        # Additional attributes specific to European options
+        self.sigma = sigma  # Volatility: how much the stock price fluctuates (e.g., 0.20 = 20% annual volatility)
+        
+        # If no interest rate provided, bootstrap it from market data using our custom function
+        # This demonstrates conditional assignment and function call
         self.interest_rate = interest_rate if interest_rate is not None else get_zero_rate(self.time_to_maturity())
-        self.dividend_yield = dividend_yield
+        
+        self.dividend_yield = dividend_yield  # Annual dividend rate (default 0 = no dividends)
 
     def option_price(self):
+        """
+        Calculate option price using Black-Scholes formula
+        
+        This method calls the black_scholes_price function from our functions module.
+        Notice how we pass self.attribute to access instance variables.
+        """
         return black_scholes_price(
             option_type=self.option_type,
             current_price=self.current_price,
             strike_price=self.strike_price,
-            time_to_maturity=self.time_to_maturity(),
+            time_to_maturity=self.time_to_maturity(),  # Method call 
             interest_rate=self.interest_rate,
             sigma=self.sigma,
             dividend_yield=self.dividend_yield
         )
     
     def greeks(self):
-        """Approximate Greeks using finite differences for European options (could be analytical)"""
-        # Note: For European options, analytical Greeks are available and generally preferred.
-        # This finite difference method is kept for consistency or if analytical Greeks are not implemented.
+        """
+        Calculate option Greeks using finite differences method
         
-        h_price = self.current_price * 0.005 # Smaller bump for price based Greeks for potentially more stability
-                                          # For European BS, even 0.01 is fine, but being slightly more precise.
-        h_vol = 0.005 # 0.5% bump for vega
-        h_rate = 0.005 # 0.5% bump for rho
-        time_bump_days = 1
+        Greeks = sensitivities of option price to market factors.
+        Finite differences = approximate derivative by bumping inputs slightly.
+        Note: Analytical Greeks exist for Black-Scholes but this shows the general method.
+        """
+        # Define bump sizes: small changes to inputs to approximate derivatives
+        h_price = self.current_price * 0.005  # 0.5% bump for stock price (proportional)
+        h_vol = 0.005      # 0.5% absolute bump for volatility
+        h_rate = 0.005     # 0.5% absolute bump for interest rate
+        time_bump_days = 1 # Move forward 1 day for theta calculation
         time_bump_years = time_bump_days / 365.25
 
-        base_price = self.option_price()
+        base_price = self.option_price()  # Calculate current option price
 
-        # Store original values to ensure they are reset, especially important if greeks are called multiple times
+        # Store original values: we'll modify self.attributes temporarily, then reset them
+        # This is important because we don't want to permanently change the option's properties
         original_current_price = self.current_price
         original_today_date = self.today_date
         original_sigma = self.sigma
         original_interest_rate = self.interest_rate
 
-        # Delta: sensitivity to underlying price
-        self.current_price = original_current_price + h_price
+        # DELTA: sensitivity to stock price changes (∂V/∂S)
+        # We calculate option price with stock price bumped up and down, then find slope
+        self.current_price = original_current_price + h_price  # Bump up
         price_up = self.option_price()
-        self.current_price = original_current_price - h_price
+        self.current_price = original_current_price - h_price  # Bump down
         price_down = self.option_price()
-        self.current_price = original_current_price # Reset
+        self.current_price = original_current_price  # Reset to original
+        
+        # Central difference formula: (f(x+h) - f(x-h)) / (2h) ≈ f'(x)
         delta = (price_up - price_down) / (2 * h_price)
         
-        # Gamma: second derivative with respect to underlying price
-        # price_up, price_down, and base_price are already calculated correctly for this formula
+        # GAMMA: convexity - how delta changes as stock price changes (∂²V/∂S²)
+        # Second derivative formula: (f(x+h) - 2f(x) + f(x-h)) / h²
         gamma = (price_up - 2 * base_price + price_down) / (h_price ** 2)
         
-        # Theta: sensitivity to time (approximate)
-        # We move today_date forward by one day, so time to maturity decreases
+        # THETA: time decay - how option loses value as time passes (∂V/∂t)
+        # Move date forward by 1 day (reducing time to maturity)
         self.today_date = date.fromordinal(original_today_date.toordinal() + time_bump_days) 
         price_theta = self.option_price()
-        self.today_date = original_today_date # Reset
-        # Theta is typically quoted as dV/dt where dt is positive (time passes). 
-        # So (new_price - old_price) / (time_passed). Since new_price (less TTM) < old_price, theta is negative for long options.
-        theta = (price_theta - base_price) / time_bump_years 
+        self.today_date = original_today_date  # Reset
+        theta = (price_theta - base_price) / time_bump_years  # Change per year
         
-        # Vega: sensitivity to volatility
-        self.sigma = original_sigma + h_vol
+        # VEGA: volatility sensitivity - how price changes with volatility (∂V/∂σ)
+        self.sigma = original_sigma + h_vol  # Bump volatility up
         price_vega = self.option_price()
-        self.sigma = original_sigma # Reset
+        self.sigma = original_sigma  # Reset
+        # Scale to 1% volatility change: if h_vol=0.005, we want change for 0.01 move
         vega = ((price_vega - base_price) / h_vol) * 0.01
         
-        # Rho: sensitivity to interest rate
-        self.interest_rate = original_interest_rate + h_rate
+        # RHO: interest rate sensitivity - how price changes with rates (∂V/∂r)
+        self.interest_rate = original_interest_rate + h_rate  # Bump rate up
         price_rho = self.option_price()
-        self.interest_rate = original_interest_rate # Reset
+        self.interest_rate = original_interest_rate  # Reset
+        # Scale to 1% rate change
         rho = ((price_rho - base_price) / h_rate) * 0.01
         
+        # Return dictionary: convenient way to return multiple related values
         return {
-            'delta': delta,
-            'gamma': gamma,
-            'theta': theta / 365.25, # Theta per day
-            'vega': vega,   # Vega is change for 1 vol point (e.g. from 20% to 21%). If h_vol is 0.005 (0.5%), then vega is scaled up.
-            'rho': rho     # Rho is change for 1 rate point (e.g. from 2% to 3%).
+            'delta': delta,                    # Stock price sensitivity
+            'gamma': gamma,                    # Convexity (curvature)
+            'theta': theta / 365.25,           # Time decay per day (convert from per year)
+            'vega': vega,                      # Volatility sensitivity
+            'rho': rho                         # Interest rate sensitivity
         }
 
 
-
 class AmericanOption(Option):
+    """
+    American option: can be exercised at any time before expiration
+    
+    Uses binomial tree method because no analytical solution exists.
+    Early exercise feature makes these more valuable than European options.
+    """
     def __init__(self, current_price, strike_price, expiry, option_type, today_date, sigma, n_steps, interest_rate=None, dividend_yield=0.0):
         super().__init__(current_price, strike_price, expiry, option_type, today_date)
+        
         self.sigma = sigma
-        self.n_steps = n_steps
+        self.n_steps = n_steps  # Number of time steps in binomial tree (more steps = more accuracy)
         self.interest_rate = interest_rate if interest_rate is not None else get_zero_rate(self.time_to_maturity())
         self.dividend_yield = dividend_yield
 
     def option_price(self):
+        """
+        Price using binomial tree with early exercise capability
+        
+        The american=True parameter tells the binomial tree to check for early exercise
+        at each node in the tree.
+        """
         return binomial_tree_price(
             current_price=self.current_price,
             strike_price=self.strike_price,
@@ -119,95 +171,99 @@ class AmericanOption(Option):
             interest_rate=self.interest_rate,
             sigma=self.sigma,
             option_type=self.option_type,
-            american=True,
+            american=True,  # Key difference: enables early exercise
             n_steps=self.n_steps,
             dividend_yield=self.dividend_yield
         )
     
     def greeks(self):
-        """Approximate Greeks using finite differences for American options, now dividend-aware"""
-        # Store original values to ensure they are reset
+        """
+        Calculate Greeks using finite differences for American options
+        
+        Same method as European, but calculations are more expensive because
+        each price calculation requires building and solving a binomial tree.
+        """
+        # Store original values for safe reset after calculations
         original_current_price = self.current_price
         original_sigma = self.sigma
         original_interest_rate = self.interest_rate
         original_today_date = self.today_date
-        # original_dividend_yield = self.dividend_yield # Not strictly needed to store/reset if it doesn't change during greeks calculation
 
-        # Use small perturbations to estimate Greeks
-        # Proportional bump for price-related Greeks
-        h_price = original_current_price * 0.01  # 1% proportional bump for price
-        if h_price == 0: h_price = 0.0001 # Avoid zero bump if price is zero
+        # Bump sizes: slightly larger for American options due to tree discretization
+        h_price = original_current_price * 0.01  # 1% proportional bump for stock price
+        if h_price == 0: h_price = 0.0001  # Safety check: avoid zero bump if stock price somehow zero
 
-        base_price = self.option_price() # This call will now use self.dividend_yield
+        base_price = self.option_price()  # This calls binomial tree calculation
         
-        # Delta: sensitivity to underlying price
+        # DELTA calculation: same finite difference approach as European
         self.current_price = original_current_price + h_price
-        up_price = self.option_price() # This call will use self.dividend_yield
+        up_price = self.option_price()  # Another tree calculation
         self.current_price = original_current_price - h_price
-        down_price = self.option_price() # This call will use self.dividend_yield
-        self.current_price = original_current_price  # Reset to original
+        down_price = self.option_price()  # Another tree calculation
+        self.current_price = original_current_price  # Reset
         delta = (up_price - down_price) / (2 * h_price)
         
-        # Gamma: second derivative with respect to underlying price
+        # GAMMA: second derivative with respect to stock price
         gamma = (up_price - 2 * base_price + down_price) / (h_price ** 2)
         
-        # Theta: sensitivity to time (approximate)
+        # THETA: time decay calculation
         time_bump_days = 1
         time_bump_years = time_bump_days / 365.25
         
         self.today_date = date.fromordinal(original_today_date.toordinal() + time_bump_days)
-        theta_price = self.option_price() # This call will use self.dividend_yield
+        theta_price = self.option_price()  # Tree calculation with less time
         self.today_date = original_today_date  # Reset
         theta = (theta_price - base_price) / time_bump_years
         
-        # Vega: sensitivity to volatility
-        h_vol_american = 0.01
+        # VEGA: volatility sensitivity
+        h_vol_american = 0.01  # Slightly larger bump for tree-based calculation
         self.sigma = original_sigma + h_vol_american
-        vega_price = self.option_price() # This call will use self.dividend_yield
+        vega_price = self.option_price()  # Tree with higher volatility
         self.sigma = original_sigma  # Reset
-        vega = ((vega_price - base_price) / h_vol_american) * 0.01 # Scaled as per previous fix
+        vega = ((vega_price - base_price) / h_vol_american) * 0.01  # Scale to 1% vol change
         
-        # Rho: sensitivity to interest rate
+        # RHO: interest rate sensitivity
         h_rate_american = 0.01
         self.interest_rate = original_interest_rate + h_rate_american
-        rho_price = self.option_price() # This call will use self.dividend_yield
+        rho_price = self.option_price()  # Tree with higher interest rate
         self.interest_rate = original_interest_rate  # Reset
-        rho = ((rho_price - base_price) / h_rate_american) * 0.01 # Scaled as per previous fix
+        rho = ((rho_price - base_price) / h_rate_american) * 0.01  # Scale to 1% rate change
         
-        # Rho_q (sensitivity to dividend yield) - Optional, but good to consider for completeness
-        # h_div = 0.005 # 0.5% bump for dividend yield sensitivity
-        # original_div_yield = self.dividend_yield
-        # self.dividend_yield = original_div_yield + h_div
-        # price_rho_q = self.option_price()
-        # self.dividend_yield = original_div_yield # Reset
-        # rho_q = ((price_rho_q - base_price) / h_div) * 0.01
-
         return {
             'delta': delta,
             'gamma': gamma,
-            'theta': theta / 365.25, # Theta per day
+            'theta': theta / 365.25,  # Convert to per-day theta
             'vega': vega,
             'rho': rho
-            # 'rho_q': rho_q # If you decide to add sensitivity to dividend yield
         }
 
 
-
 class BarrierOption(Option):
+    """
+    Barrier option: only becomes active if stock hits a barrier level
+    
+    Up-and-in: barrier above current price, option activates if stock moves up to barrier.
+    More complex than regular options because payoff depends on entire price path.
+    """
     def __init__(self, current_price, strike_price, expiry, option_type, today_date, sigma, barrier_price, method, n_steps, interest_rate=None, dividend_yield=0.0):
         super().__init__(current_price, strike_price, expiry, option_type, today_date)
+        
         self.sigma = sigma
-        self.barrier_price = barrier_price
-        self.method = method
-        self.n_steps = n_steps # For binomial, this is tree steps; for MC, this could be paths or simulation steps for barrier monitoring
+        self.barrier_price = barrier_price  # Level that must be hit to activate option
+        self.method = method                # "binomial" or "monte-carlo"
+        self.n_steps = n_steps             # For binomial: tree steps; for Monte Carlo: number of paths
         self.interest_rate = interest_rate if interest_rate is not None else get_zero_rate(self.time_to_maturity())
         self.dividend_yield = dividend_yield
 
     def option_price(self):
+        """
+        Calculate barrier option price using specified method
+        
+        Demonstrates polymorphism: same method name, different behavior based on input.
+        """
         if self.method == "monte-carlo":
-            # Assuming self.n_steps passed to BarrierOption was intended for n_paths for MC pricing
-            # And n_mc_sim_steps for monitoring the barrier along the path if different from 1 (default in func is 100)
-            n_mc_sim_steps = 100 # Or make this an attribute if you want to control it per option instance
+            # Monte Carlo: simulate many price paths, check if barrier hit during each path
+            n_mc_sim_steps = 100  # How many time steps to simulate in each path
             return monte_carlo_barrier_price(
                 current_price=self.current_price,
                 strike_price=self.strike_price,
@@ -215,11 +271,12 @@ class BarrierOption(Option):
                 interest_rate=self.interest_rate,
                 sigma=self.sigma,
                 barrier_price=self.barrier_price,
-                n_paths=self.n_steps, # Using self.n_steps as n_paths for MC
-                n_steps=n_mc_sim_steps, # Path simulation steps for barrier check
+                n_paths=self.n_steps,      # self.n_steps = number of simulation paths
+                n_steps=n_mc_sim_steps,    # Time steps within each path
                 dividend_yield=self.dividend_yield
             )
         elif self.method == "binomial":
+            # Binomial tree: track barrier breach status at each node
             return binomial_barrier_price_up_and_in(
                 option_type=self.option_type,
                 current_price=self.current_price,
@@ -232,220 +289,252 @@ class BarrierOption(Option):
                 dividend_yield=self.dividend_yield
             )
         else:
+            # Error handling: raise exception if invalid method specified
             raise ValueError("Unsupported method. Use 'monte-carlo' or 'binomial'.")
 
     def greeks(self):
-        """Calculate Greeks using finite differences for barrier options"""
+        """
+        Calculate Greeks for barrier options using finite differences
+        
+        Barrier options can have discontinuous behavior near the barrier,
+        so we use smaller bump sizes to get more accurate derivatives.
+        """
         # Store original values
         original_current_price = self.current_price
         original_sigma = self.sigma
         original_interest_rate = self.interest_rate
         original_today_date = self.today_date
 
-        # Define bump sizes
-        # Proportional bump for price, smaller absolute bumps for vol and rate
-        h_price = original_current_price * 0.001 
-        if h_price == 0: h_price = 0.0001 # Avoid zero bump if price is zero
-        h_vol = 0.005  # 0.5% bump for vega
-        h_rate = 0.005 # 0.5% bump for rho
+        # Smaller bump sizes due to potential discontinuities near barrier
+        h_price = original_current_price * 0.001  # 0.1% bump (smaller than regular options)
+        if h_price == 0: h_price = 0.0001  # Safety check
+        h_vol = 0.005   # 0.5% volatility bump
+        h_rate = 0.005  # 0.5% rate bump
         time_bump_days = 1
         time_bump_years = time_bump_days / 365.25
 
-        base_price = self.option_price()
+        base_price = self.option_price()  # Can be expensive if using Monte Carlo
         
-        # Delta
+        # DELTA calculation with smaller bumps
         self.current_price = original_current_price + h_price
         up_price = self.option_price()
         self.current_price = original_current_price - h_price
         down_price = self.option_price()
-        self.current_price = original_current_price # Reset
+        self.current_price = original_current_price  # Reset
         delta = (up_price - down_price) / (2 * h_price)
         
-        # Gamma
-        # Uses the same up_price, down_price, base_price
+        # GAMMA calculation
         gamma = (up_price - 2 * base_price + down_price) / (h_price ** 2)
         
-        # Vega
+        # VEGA calculation
         self.sigma = original_sigma + h_vol
         vega_price = self.option_price()
-        self.sigma = original_sigma # Reset
+        self.sigma = original_sigma  # Reset
         vega = ((vega_price - base_price) / h_vol) * 0.01
         
-        # Theta
+        # THETA calculation
         self.today_date = date.fromordinal(original_today_date.toordinal() + time_bump_days)
         theta_price = self.option_price()
-        self.today_date = original_today_date # Reset
+        self.today_date = original_today_date  # Reset
         theta = (theta_price - base_price) / time_bump_years
         
-        # Rho
+        # RHO calculation
         self.interest_rate = original_interest_rate + h_rate
         rho_price = self.option_price()
-        self.interest_rate = original_interest_rate # Reset
+        self.interest_rate = original_interest_rate  # Reset
         rho = ((rho_price - base_price) / h_rate) * 0.01
         
         return {
             'delta': delta,
             'gamma': gamma,
-            'theta': theta / 365.25, # Theta per day
+            'theta': theta / 365.25,  # Per-day theta
             'vega': vega,
             'rho': rho
         }
 
 
 class BasketOption(Option):
+    """
+    Basket option: payoff depends on weighted combination of multiple assets
+    
+    Example: option on portfolio of 60% AAPL + 40% GOOGL.
+    Challenge: assets are correlated, need to model how they move together.
+    """
     def __init__(self, current_prices, weights, strike_price, expiry, option_type, today_date, sigmas, correlation_matrix, interest_rate=None, dividend_yields=None):
-        # Calculate basket value for the base Option class
+        # Calculate weighted basket value for the parent Option class
+        # sum() with zip() is Python idiom for weighted sum: Σ(weight_i * price_i)
         basket_value = sum(w * p for w, p in zip(weights, current_prices))
         super().__init__(basket_value, strike_price, expiry, option_type, today_date)
-        self.current_prices = np.array(current_prices) # Ensure numpy array for operations
-        self.weights = np.array(weights)
-        self.sigmas = np.array(sigmas) # Changed from self.sigma to self.sigmas for clarity (list of sigmas)
-        self.correlation_matrix = np.array(correlation_matrix)
+        
+        # Convert to numpy arrays for efficient mathematical operations
+        # Lists are fine for small data, but numpy arrays are much faster for math
+        self.current_prices = np.array(current_prices)  # Individual asset prices
+        self.weights = np.array(weights)                # Portfolio weights (must sum to 1)
+        self.sigmas = np.array(sigmas)                  # Individual asset volatilities
+        self.correlation_matrix = np.array(correlation_matrix)  # How assets move together
         self.interest_rate = interest_rate if interest_rate is not None else get_zero_rate(self.time_to_maturity())
-        # Handle dividend yields for each asset in the basket
+        
+        # Handle dividend yields: each asset can have different dividend rate
         if dividend_yields is None:
-            self.dividend_yields = np.zeros(len(current_prices))
+            self.dividend_yields = np.zeros(len(current_prices))  # Default: no dividends
         else:
             self.dividend_yields = np.array(dividend_yields)
+        
+        # Error checking: common programming practice to validate inputs
         if len(self.dividend_yields) != len(current_prices):
             raise ValueError("Length of dividend_yields must match length of current_prices")
 
-
     def option_price(self):
+        """
+        Price basket option using Monte Carlo simulation
+        
+        Only realistic method for multi-asset options with correlation.
+        Monte Carlo handles correlation through Cholesky decomposition.
+        """
         return monte_carlo_basket_price(
             current_prices=self.current_prices,
             weights=self.weights,
             strike_price=self.strike_price,
             time_to_maturity=self.time_to_maturity(),
             interest_rate=self.interest_rate,
-            sigma=self.sigmas, # Pass self.sigmas as the 'sigma' argument
+            sigma=self.sigmas,  # Pass array of individual volatilities
             correlation_matrix=self.correlation_matrix,
             option_type=self.option_type,
-            n_paths=100000, # Consider making this an attribute or parameter
-            dividend_yields=self.dividend_yields # Pass dividend yields
+            n_paths=100000,  # High number for accuracy (but slower computation)
+            dividend_yields=self.dividend_yields
         )
     
     def greeks(self):
-        """Calculate basket option Greeks - returns delta for each underlying"""
-        # Store original values
-        original_current_prices = self.current_prices.copy()
+        """
+        Calculate basket option Greeks
+        
+        More complex than single-asset options: we calculate delta for EACH underlying asset.
+        Shows how basket option price changes when individual asset prices change.
+        """
+        # Store original values: we'll modify multiple arrays
+        original_current_prices = self.current_prices.copy()  # .copy() creates independent copy
         original_sigmas = self.sigmas.copy()
         original_interest_rate = self.interest_rate
         original_today_date = self.today_date
-        # original_current_basket_price = self.current_price # This is the weighted sum, calculated by super().__init__
 
-        base_option_price = self.option_price()
-        deltas = []
+        base_option_price = self.option_price()  # Expensive Monte Carlo calculation
+        deltas = []  # List to store delta for each underlying asset
         
-        # Deltas for each underlying asset
+        # Calculate individual asset deltas using loop
+        # Range(len(list)) is common Python pattern to iterate over indices
         for i in range(len(self.current_prices)):
-            h_asset_i = original_current_prices[i] * 0.001 # Proportional bump for this specific asset
-            if h_asset_i == 0: h_asset_i = 0.00001 # Avoid zero bump
+            h_asset_i = original_current_prices[i] * 0.001  # 0.1% bump for asset i
+            if h_asset_i == 0: h_asset_i = 0.00001  # Avoid zero bump
 
-            # Bump up i-th asset price
-            temp_prices_up = original_current_prices.copy()
-            temp_prices_up[i] += h_asset_i
+            # Bump UP asset i's price, recalculate basket value and option price
+            temp_prices_up = original_current_prices.copy()  # Copy to avoid modifying original
+            temp_prices_up[i] += h_asset_i  # Modify only asset i
             self.current_prices = temp_prices_up
-            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices)) # Update overall basket price for option pricer
-            price_up = self.option_price()
+            # Recalculate overall basket value (needed for option pricing)
+            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+            price_up = self.option_price()  # Monte Carlo with asset i bumped up
             
-            # Bump down i-th asset price
+            # Bump DOWN asset i's price
             temp_prices_down = original_current_prices.copy()
-            temp_prices_down[i] -= h_asset_i
+            temp_prices_down[i] -= h_asset_i  # Modify only asset i downward
             self.current_prices = temp_prices_down
-            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices)) # Update overall basket price
-            price_down = self.option_price()
+            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+            price_down = self.option_price()  # Monte Carlo with asset i bumped down
             
+            # Calculate delta for asset i using central difference
             delta_i = (price_up - price_down) / (2 * h_asset_i)
-            deltas.append(delta_i)
+            deltas.append(delta_i)  # Add to our list of deltas
         
-        self.current_prices = original_current_prices # Reset asset prices
-        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices)) # Reset overall basket price
+        # Reset to original values after delta calculations
+        self.current_prices = original_current_prices
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
 
-        # Gamma for the basket (sensitivity of the basket option price to a uniform change in underlying basket value)
-        # We bump all underlying asset prices proportionally to simulate a change in the basket's value.
-        h_basket_simulation = 0.001 # Proportional bump for the entire basket's value simulation
+        # BASKET GAMMA: sensitivity of option to uniform change in all asset prices
+        # This simulates what happens if entire market moves up/down together
+        h_basket_simulation = 0.001  # 0.1% uniform bump to all assets
         
-        # Price when all underlyings are bumped up (simulating basket value up)
+        # Multiply all prices by (1 + bump): uniform percentage increase
         temp_prices_gamma_up = original_current_prices * (1 + h_basket_simulation)
         self.current_prices = temp_prices_gamma_up
         self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
         price_gamma_up = self.option_price()
 
-        # Price when all underlyings are bumped down (simulating basket value down)
+        # Uniform decrease
         temp_prices_gamma_down = original_current_prices * (1 - h_basket_simulation)
         self.current_prices = temp_prices_gamma_down
         self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
         price_gamma_down = self.option_price()
 
-        # The "underlying price" for this gamma is the original basket value.
-        # The bump h_price_for_gamma should correspond to the change in basket value.
-        # Original basket value was stored in self.current_price when super().__init__ was called or after deltas.
-        # Let's use original_current_prices and weights to ensure it's the true base.
+        # Calculate gamma based on change in total basket value
         original_basket_value = sum(w * p for w, p in zip(self.weights, original_current_prices))
-        # The change in basket value for the bump is original_basket_value * h_basket_simulation
         h_basket_value_change = original_basket_value * h_basket_simulation
 
-        if h_basket_value_change == 0: # Avoid division by zero if basket value is zero
+        if h_basket_value_change == 0:  # Avoid division by zero (defensive programming)
             basket_gamma = 0.0
         else:
-            # (price_up - 2*base + price_down) / (change_in_underlying_value)^2
+            # Second derivative formula for gamma
             basket_gamma = (price_gamma_up - 2 * base_option_price + price_gamma_down) / (h_basket_value_change ** 2)
 
-        self.current_prices = original_current_prices # Reset asset prices
-        self.current_price = original_basket_value # Reset overall basket price to its very original state
+        # Reset everything back to original state
+        self.current_prices = original_current_prices
+        self.current_price = original_basket_value
 
-        # Vega (sensitivity to a parallel shift in all volatilities)
-        h_vol = 0.005 # 0.5% bump for all volatilities
-        temp_sigmas_up = original_sigmas + h_vol
+        # VEGA: sensitivity to parallel shift in ALL volatilities
+        # What if all assets become more/less volatile together?
+        h_vol = 0.005  # Add 0.5% to all asset volatilities
+        temp_sigmas_up = original_sigmas + h_vol  # Numpy array addition: adds to each element
         self.sigmas = temp_sigmas_up
         price_vega_up = self.option_price()
-        self.sigmas = original_sigmas # Reset sigmas
-        basket_vega = ((price_vega_up - base_option_price) / h_vol) * 0.01 # Scaled
+        self.sigmas = original_sigmas  # Reset
+        basket_vega = ((price_vega_up - base_option_price) / h_vol) * 0.01  # Scale to 1% vol change
         
-        # Theta
+        # THETA: time decay for basket option
         time_bump_days = 1
         time_bump_years = time_bump_days / 365.25
         self.today_date = date.fromordinal(original_today_date.toordinal() + time_bump_days)
         price_theta = self.option_price()
-        self.today_date = original_today_date # Reset
+        self.today_date = original_today_date  # Reset
         basket_theta = (price_theta - base_option_price) / time_bump_years
         
-        # Rho
-        h_rate = 0.005 # 0.5% bump for rho
+        # RHO: interest rate sensitivity for basket option
+        h_rate = 0.005  # 0.5% rate bump
         self.interest_rate = original_interest_rate + h_rate
         price_rho = self.option_price()
-        self.interest_rate = original_interest_rate # Reset
-        basket_rho = ((price_rho - base_option_price) / h_rate) * 0.01 # Scaled
-        
-        # Portfolio volatility (already calculated, but useful to return)
-        # This is an attribute of the basket itself, not a greek of the option value in the traditional sense, but often reported alongside.
-        # Ensure _calculate_portfolio_volatility is correct and uses self.sigmas
-        # portfolio_vol = self._calculate_portfolio_volatility() 
-        # For now, I will remove portfolio_vol from greeks output as it's not a sensitivity of the option price in the same way.
-        # If needed, it can be called separately from the BasketOption instance.
+        self.interest_rate = original_interest_rate  # Reset
+        basket_rho = ((price_rho - base_option_price) / h_rate) * 0.01  # Scale to 1% rate change
 
+        # Return comprehensive Greeks dictionary
         return {
-            'deltas': deltas,  # Individual deltas for each asset
-            'gamma': basket_gamma, # Added basket gamma
-            'vega': basket_vega, # Already scaled
-            'theta': basket_theta / 365.25, # Theta per day
-            'rho': basket_rho # Already scaled
-            # 'portfolio_volatility': portfolio_vol # Removed for now
+            'deltas': deltas,           # List of deltas, one for each underlying asset
+            'gamma': basket_gamma,      # Overall basket convexity
+            'vega': basket_vega,        # Sensitivity to volatility changes
+            'theta': basket_theta / 365.25,  # Time decay per day
+            'rho': basket_rho           # Interest rate sensitivity
         }
     
     def _calculate_portfolio_volatility(self):
-        """Calculate the portfolio volatility given weights, individual volatilities, and correlation matrix"""
+        """
+        Calculate portfolio volatility using modern portfolio theory
+        
+        Portfolio volatility ≠ weighted average of individual volatilities.
+        Must account for correlations: uncorrelated assets reduce total risk.
+        Formula: σ_portfolio² = Σᵢ Σⱼ wᵢ wⱼ σᵢ σⱼ ρᵢⱼ
+        """
         n = len(self.weights)
         portfolio_variance = 0
         
-        # Ensure sigmas is used here, not self.sigma (which was an old single value)
+        # Double loop: consider all pairs of assets (including asset with itself)
         for i in range(n):
             for j in range(n):
-                portfolio_variance += (self.weights[i] * self.weights[j] * 
-                                     self.sigmas[i] * self.sigmas[j] * # Changed from self.sigma[i] to self.sigmas[i]
-                                     self.correlation_matrix[i,j]) # Assuming correlation_matrix is a numpy array
+                # Add contribution of asset pair (i,j) to total portfolio variance
+                portfolio_variance += (self.weights[i] * self.weights[j] *    # Weight contribution
+                                     self.sigmas[i] * self.sigmas[j] *        # Volatility contribution  
+                                     self.correlation_matrix[i,j])            # Correlation contribution
         
-        if portfolio_variance < 0: # Should not happen with valid inputs
+        # Defensive programming: variance should never be negative with valid inputs
+        if portfolio_variance < 0:
             return 0.0
+        
+        # Convert variance to volatility (standard deviation)
         return np.sqrt(portfolio_variance)
+
