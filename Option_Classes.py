@@ -362,8 +362,40 @@ class BasketOption(Option):
         self.current_prices = original_current_prices # Reset asset prices
         self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices)) # Reset overall basket price
 
+        # Gamma for the basket (sensitivity of the basket option price to a uniform change in underlying basket value)
+        # We bump all underlying asset prices proportionally to simulate a change in the basket's value.
+        h_basket_simulation = 0.001 # Proportional bump for the entire basket's value simulation
+        
+        # Price when all underlyings are bumped up (simulating basket value up)
+        temp_prices_gamma_up = original_current_prices * (1 + h_basket_simulation)
+        self.current_prices = temp_prices_gamma_up
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+        price_gamma_up = self.option_price()
+
+        # Price when all underlyings are bumped down (simulating basket value down)
+        temp_prices_gamma_down = original_current_prices * (1 - h_basket_simulation)
+        self.current_prices = temp_prices_gamma_down
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+        price_gamma_down = self.option_price()
+
+        # The "underlying price" for this gamma is the original basket value.
+        # The bump h_price_for_gamma should correspond to the change in basket value.
+        # Original basket value was stored in self.current_price when super().__init__ was called or after deltas.
+        # Let's use original_current_prices and weights to ensure it's the true base.
+        original_basket_value = sum(w * p for w, p in zip(self.weights, original_current_prices))
+        # The change in basket value for the bump is original_basket_value * h_basket_simulation
+        h_basket_value_change = original_basket_value * h_basket_simulation
+
+        if h_basket_value_change == 0: # Avoid division by zero if basket value is zero
+            basket_gamma = 0.0
+        else:
+            # (price_up - 2*base + price_down) / (change_in_underlying_value)^2
+            basket_gamma = (price_gamma_up - 2 * base_option_price + price_gamma_down) / (h_basket_value_change ** 2)
+
+        self.current_prices = original_current_prices # Reset asset prices
+        self.current_price = original_basket_value # Reset overall basket price to its very original state
+
         # Vega (sensitivity to a parallel shift in all volatilities)
-        # This is a simplified basket vega. More complex vegas could be calculated per asset.
         h_vol = 0.005 # 0.5% bump for all volatilities
         temp_sigmas_up = original_sigmas + h_vol
         self.sigmas = temp_sigmas_up
@@ -395,6 +427,7 @@ class BasketOption(Option):
 
         return {
             'deltas': deltas,  # Individual deltas for each asset
+            'gamma': basket_gamma, # Added basket gamma
             'vega': basket_vega, # Already scaled
             'theta': basket_theta / 365.25, # Theta per day
             'rho': basket_rho # Already scaled
