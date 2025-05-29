@@ -32,8 +32,8 @@ def black_scholes_price(option_type, current_price, strike_price, time_to_maturi
 def binomial_tree_price(
     current_price,    # S: Current stock price 
     strike_price,     # K: Strike price 
-    time_to_maturity, # T: Time until expiration in years (0.25 = 3 months)
-    interest_rate,    # r: Risk-free interest rate (like treasury bond rate)
+    time_to_maturity, # T: Time until expiration in years 
+    interest_rate,    # r: Risk-free interest rate 
     sigma,            # σ: Volatility 
     option_type,      # 'call' (right to buy) or 'put' (right to sell)
     american,         # True = can exercise early, False = only at expiration
