@@ -383,6 +383,9 @@ class BasketOption(Option):
         # Error checking: common programming practice to validate inputs
         if len(self.dividend_yields) != len(current_prices):
             raise ValueError("Length of dividend_yields must match length of current_prices")
+        
+        # Set higher number of paths for Greek calculations to reduce noise
+        self._gamma_paths = 200000  # More paths for gamma stability
 
     def option_price(self):
         """
@@ -411,6 +414,13 @@ class BasketOption(Option):
         More complex than single-asset options: we calculate delta for EACH underlying asset.
         Shows how basket option price changes when individual asset prices change.
         """
+        # Check if reproducible Greeks are enabled
+        use_seeds = getattr(self, '_reproducible_greeks', True)  # Default to True
+        
+        if use_seeds:
+            # Set random seed for reproducible Greeks calculations
+            np.random.seed(42)
+        
         # Store original values: we'll modify multiple arrays
         original_current_prices = self.current_prices.copy()  # .copy() creates independent copy
         original_sigmas = self.sigmas.copy()
@@ -426,6 +436,10 @@ class BasketOption(Option):
             h_asset_i = original_current_prices[i] * 0.001  # 0.1% bump for asset i
             if h_asset_i == 0: h_asset_i = 0.00001  # Avoid zero bump
 
+            # Set consistent seed for each asset's delta calculation
+            if use_seeds:
+                np.random.seed(100 + i)  # Different base seed for main deltas vs gamma deltas
+            
             # Bump UP asset i's price, recalculate basket value and option price
             temp_prices_up = original_current_prices.copy()  # Copy to avoid modifying original
             temp_prices_up[i] += h_asset_i  # Modify only asset i
@@ -433,6 +447,10 @@ class BasketOption(Option):
             # Recalculate overall basket value (needed for option pricing)
             self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
             price_up = self.option_price()  # Monte Carlo with asset i bumped up
+            
+            # Reset seed for consistency
+            if use_seeds:
+                np.random.seed(100 + i)
             
             # Bump DOWN asset i's price
             temp_prices_down = original_current_prices.copy()
@@ -449,35 +467,47 @@ class BasketOption(Option):
         self.current_prices = original_current_prices
         self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
 
-        # BASKET GAMMA: sensitivity of option to uniform change in all asset prices
-        # This simulates what happens if entire market moves up/down together
-        h_basket_simulation = 0.001  # 0.1% uniform bump to all assets
-        
-        # Multiply all prices by (1 + bump): uniform percentage increase
-        temp_prices_gamma_up = original_current_prices * (1 + h_basket_simulation)
-        self.current_prices = temp_prices_gamma_up
-        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
-        price_gamma_up = self.option_price()
+        # INDIVIDUAL COMPONENT GAMMAS: sensitivity of each asset's delta to that asset's price change
+        # This is what you need for proper risk management of each component
+        # Use higher precision for gamma calculations due to second derivative noise amplification
+        gammas = []
+        for i in range(len(self.current_prices)):
+            h_asset_i = original_current_prices[i] * 0.01  # Use larger bump (1%) for gamma to reduce noise
+            if h_asset_i == 0: h_asset_i = 0.001  # Avoid zero bump
 
-        # Uniform decrease
-        temp_prices_gamma_down = original_current_prices * (1 - h_basket_simulation)
-        self.current_prices = temp_prices_gamma_down
-        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
-        price_gamma_down = self.option_price()
-
-        # Calculate gamma based on change in total basket value
-        original_basket_value = sum(w * p for w, p in zip(self.weights, original_current_prices))
-        h_basket_value_change = original_basket_value * h_basket_simulation
-
-        if h_basket_value_change == 0:  # Avoid division by zero (defensive programming)
-            basket_gamma = 0.0
-        else:
-            # Second derivative formula for gamma
-            basket_gamma = (price_gamma_up - 2 * base_option_price + price_gamma_down) / (h_basket_value_change ** 2)
-
-        # Reset everything back to original state
-        self.current_prices = original_current_prices
-        self.current_price = original_basket_value
+            # Set random seed for reproducible results across price bumps
+            if use_seeds:
+                np.random.seed(42 + i)  # Different seed for each asset but consistent across runs
+            
+            # Calculate delta with asset i bumped UP
+            temp_prices_up = original_current_prices.copy()
+            temp_prices_up[i] += h_asset_i
+            self.current_prices = temp_prices_up
+            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+            
+            # Reset seed for consistent random numbers
+            if use_seeds:
+                np.random.seed(42 + i)
+            delta_up = self._calculate_single_asset_delta(i, original_current_prices, temp_prices_up)
+            
+            # Calculate delta with asset i bumped DOWN
+            temp_prices_down = original_current_prices.copy()
+            temp_prices_down[i] -= h_asset_i
+            self.current_prices = temp_prices_down
+            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+            
+            # Reset seed for consistent random numbers
+            if use_seeds:
+                np.random.seed(42 + i)
+            delta_down = self._calculate_single_asset_delta(i, original_current_prices, temp_prices_down)
+            
+            # Calculate gamma for asset i using larger bump and seed control
+            gamma_i = (delta_up - delta_down) / (2 * h_asset_i)
+            gammas.append(gamma_i)
+            
+            # Reset to original values
+            self.current_prices = original_current_prices
+            self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
 
         # VEGA: sensitivity to parallel shift in ALL volatilities
         # What if all assets become more/less volatile together?
@@ -506,7 +536,7 @@ class BasketOption(Option):
         # Return comprehensive Greeks dictionary
         return {
             'deltas': deltas,           # List of deltas, one for each underlying asset
-            'gamma': basket_gamma,      # Overall basket convexity
+            'gammas': gammas,           # List of gammas, one for each underlying asset
             'vega': basket_vega,        # Sensitivity to volatility changes
             'theta': basket_theta / 365.25,  # Time decay per day
             'rho': basket_rho           # Interest rate sensitivity
@@ -537,4 +567,89 @@ class BasketOption(Option):
         
         # Convert variance to volatility (standard deviation)
         return np.sqrt(portfolio_variance)
+
+    def _calculate_single_asset_delta(self, asset_index, original_prices, current_prices_state):
+        """
+        Helper method to calculate delta for a single asset with high precision
+        Used for gamma calculations to reduce Monte Carlo noise
+        """
+        # Store current state
+        temp_current_prices = self.current_prices.copy()
+        temp_current_price = self.current_price
+        
+        # Set prices to the specified state
+        self.current_prices = current_prices_state.copy()
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+        
+        # Calculate delta for the specified asset using higher precision
+        h_asset = original_prices[asset_index] * 0.005  # 0.5% bump for delta calculation
+        if h_asset == 0: h_asset = 0.0001
+        
+        # Bump asset price up
+        prices_up = self.current_prices.copy()
+        prices_up[asset_index] += h_asset
+        self.current_prices = prices_up
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+        
+        # Use more paths for delta calculation in gamma computation
+        original_paths = getattr(self, '_gamma_paths', 200000)
+        price_up = monte_carlo_basket_price(
+            current_prices=self.current_prices,
+            weights=self.weights,
+            strike_price=self.strike_price,
+            time_to_maturity=self.time_to_maturity(),
+            interest_rate=self.interest_rate,
+            sigma=self.sigmas,
+            correlation_matrix=self.correlation_matrix,
+            option_type=self.option_type,
+            n_paths=original_paths,  # Higher paths for stability
+            dividend_yields=self.dividend_yields
+        )
+        
+        # Bump asset price down
+        prices_down = self.current_prices.copy()
+        prices_down[asset_index] -= 2 * h_asset  # Move from +h to -h
+        self.current_prices = prices_down
+        self.current_price = sum(w * p for w, p in zip(self.weights, self.current_prices))
+        
+        price_down = monte_carlo_basket_price(
+            current_prices=self.current_prices,
+            weights=self.weights,
+            strike_price=self.strike_price,
+            time_to_maturity=self.time_to_maturity(),
+            interest_rate=self.interest_rate,
+            sigma=self.sigmas,
+            correlation_matrix=self.correlation_matrix,
+            option_type=self.option_type,
+            n_paths=original_paths,  # Higher paths for stability
+            dividend_yields=self.dividend_yields
+        )
+        
+        # Calculate delta
+        delta = (price_up - price_down) / (2 * h_asset)
+        
+        # Restore original state
+        self.current_prices = temp_current_prices
+        self.current_price = temp_current_price
+        
+        return delta
+
+    def set_gamma_precision(self, paths=200000):
+        """
+        Set the number of Monte Carlo paths used for gamma calculations
+        Higher paths = more stable gamma but slower computation
+        """
+        self._gamma_paths = paths
+        return self
+    
+    def set_reproducible_greeks(self, reproducible=True):
+        """
+        Control whether Greeks calculations should be reproducible (same results each run)
+        or use natural Monte Carlo variation
+        
+        reproducible=True: Same results each run (good for testing/debugging)
+        reproducible=False: Natural variation each run (more realistic)
+        """
+        self._reproducible_greeks = reproducible
+        return self
 
